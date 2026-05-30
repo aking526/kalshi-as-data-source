@@ -52,18 +52,18 @@ Sources:
 
 ## Scope
 
-The first version should be a research dashboard, not a trading tool. It should ingest Kalshi market data, store snapshots and derived metrics, and provide analyst-friendly views for monitoring and comparing implied probabilities.
+The first version should be a research dashboard, not a trading tool. For the prototype, it should query Kalshi directly, transform API responses at request/render time, and provide analyst-friendly views for monitoring and comparing implied probabilities without operating a database.
 
 ### In Scope
 
 - Read-only Kalshi API integration.
 - Market, event, and series discovery.
 - Price, spread, volume, liquidity, and open-interest tracking.
-- Candlestick ingestion where available.
-- Optional orderbook snapshots for liquidity and depth analysis.
+- Candlestick reads where available.
+- Optional orderbook reads for liquidity and depth analysis.
 - Market classification into macro, company, KPI, policy, and event-driven themes.
 - Probability, movement, and liquidity analytics.
-- Dashboard views for exploration, watchlists, charts, and theme-level summaries.
+- Dashboard views for exploration, charts, and theme-level summaries.
 - Clear separation between raw API fields and derived calculations.
 
 ### Out of Scope
@@ -73,6 +73,7 @@ The first version should be a research dashboard, not a trading tool. It should 
 - Automated trading strategies.
 - Investment recommendations.
 - User-generated public forecasts in the initial version.
+- Persistent storage, scheduled ingestion jobs, account systems, or backend-managed watchlists in the prototype.
 
 ## Recommended Tech Stack
 
@@ -86,196 +87,164 @@ The first version should be a research dashboard, not a trading tool. It should 
 
 ### Backend
 
-- **API Layer:** Next.js route handlers or a small Fastify service in TypeScript. Start inside Next.js unless ingestion complexity forces a separate service.
-- **Ingestion Workers:** Node.js/TypeScript scripts run on a schedule. Use a queue only after polling cadence and failure handling require it.
-- **Database:** PostgreSQL as the primary store.
-- **Time Series:** TimescaleDB extension if the project begins collecting frequent price/orderbook snapshots. Plain PostgreSQL is fine for the first prototype.
-- **ORM/Migrations:** Prisma for schema management and type-safe access.
-- **Caching:** Redis only if dashboard query latency or rate limiting becomes a problem. Avoid it in the first version unless needed.
+- **API Layer:** Next.js route handlers that proxy read-only Kalshi requests, normalize responses, and keep any API credentials server-side if needed.
+- **Data Access:** Direct calls to Kalshi endpoints on page load, user search, filter changes, and chart requests.
+- **Runtime Validation:** Zod schemas for Kalshi responses and derived metric inputs.
+- **Caching:** Use framework/request-level caching where appropriate. Avoid Redis or any separate cache service in the prototype.
+- **Persistence:** None for the prototype. Browser `localStorage` can be used only for UI preferences or a personal watchlist.
 
 ### Development and Deployment
 
 - **Package Manager:** pnpm.
 - **Validation:** Zod for API response validation and derived metric inputs.
-- **Testing:** Vitest for calculations and ingestion transforms; Playwright for key dashboard flows once the UI exists.
-- **Deployment:** Vercel for the dashboard, with a separate scheduled worker if Vercel Cron is too constrained.
+- **Testing:** Vitest for calculations and API transforms; Playwright for key dashboard flows once the UI exists.
+- **Deployment:** Vercel for the dashboard.
 - **Secrets:** Environment variables for Kalshi API credentials if authenticated read-only endpoints are used.
 
 ## System Architecture
 
 ```text
 Kalshi API
-  -> Ingestion jobs
-  -> Raw response validation
-  -> PostgreSQL tables
-  -> Derived analytics jobs
-  -> Next.js API routes
+  -> Next.js route handlers
+  -> Response validation and normalization
+  -> Request-time derived metrics
   -> Dashboard views
+  -> Optional browser localStorage for UI preferences/watchlists
 ```
 
-The app should favor durable snapshots over purely live API calls. Kalshi's current market view is useful, but the research value comes from preserving how expectations evolve over time.
+The prototype should favor simplicity: use Kalshi's current market data and available candlestick endpoints instead of maintaining its own historical store. The limitation is that the app only sees history Kalshi provides at query time; durable internal history can be added later if the concept proves useful.
 
-## Data Model
+## Runtime Data Shapes
 
-The schema should preserve Kalshi's object hierarchy while adding research-specific derived tables.
+The prototype does not need database tables. It should use TypeScript types and Zod schemas that preserve Kalshi's object hierarchy while adding request-time derived fields for dashboard display.
 
-### Core Entities
+### Core API Shapes
 
-```text
-series
-  ticker
-  title
-  category
-  frequency
-  tags
-  settlement_sources
-  contract_url
-  contract_terms_url
-  volume
-  last_updated_at
+```ts
+type Series = {
+  ticker: string;
+  title: string;
+  category?: string;
+  frequency?: string;
+  tags: string[];
+  settlement_sources?: Array<{ name: string; url?: string }>;
+  contract_url?: string;
+  contract_terms_url?: string;
+  volume?: number;
+  last_updated_at?: string;
+}
 
-events
-  event_ticker
-  series_ticker
-  title
-  category
-  status
-  mutually_exclusive
-  expected_expiration_at
-  close_at
-  settlement_sources
-  raw_payload
+type Event = {
+  event_ticker: string;
+  series_ticker?: string;
+  title: string;
+  category?: string;
+  status?: string;
+  mutually_exclusive?: boolean;
+  expected_expiration_at?: string;
+  close_at?: string;
+  settlement_sources?: Array<{ name: string; url?: string }>;
+}
 
-markets
-  ticker
-  event_ticker
-  series_ticker
-  title
-  subtitle
-  market_type
-  strike_type
-  status
-  yes_sub_title
-  no_sub_title
-  open_at
-  close_at
-  expiration_at
-  settlement_at
-  settlement_value
-  rules_primary
-  rules_secondary
-  custom_strike
-  price_level_structure
-  raw_payload
+type Market = {
+  ticker: string;
+  event_ticker: string;
+  series_ticker?: string;
+  title: string;
+  subtitle?: string;
+  market_type?: string;
+  strike_type?: string;
+  status: string;
+  yes_sub_title?: string;
+  no_sub_title?: string;
+  open_at?: string;
+  close_at?: string;
+  expiration_at?: string;
+  settlement_at?: string;
+  settlement_value?: string;
+  rules_primary?: string;
+  rules_secondary?: string;
+  custom_strike?: Record<string, unknown>;
+  price_level_structure?: string;
+}
 ```
 
-### Time Series Tables
+### Derived Dashboard Shapes
 
-```text
-market_snapshots
-  id
-  market_ticker
-  observed_at
-  yes_bid
-  yes_ask
-  no_bid
-  no_ask
-  last_price
-  previous_price
-  midpoint_price
-  implied_probability_mid
-  bid_ask_spread
-  volume
-  volume_24h
-  open_interest
-  liquidity
-  notional_value
+```ts
+type MarketQuote = {
+  market_ticker: string;
+  observed_at: string;
+  yes_bid?: number;
+  yes_ask?: number;
+  no_bid?: number;
+  no_ask?: number;
+  last_price?: number;
+  previous_price?: number;
+  midpoint_price?: number;
+  implied_probability_mid?: number;
+  bid_ask_spread?: number;
+  volume?: number;
+  volume_24h?: number;
+  open_interest?: number;
+  liquidity?: number;
+  notional_value?: number;
+}
 
-market_candlesticks
-  market_ticker
-  period_start_at
-  period_end_at
-  interval_minutes
-  yes_bid_open
-  yes_bid_high
-  yes_bid_low
-  yes_bid_close
-  yes_ask_open
-  yes_ask_high
-  yes_ask_low
-  yes_ask_close
-  price_open
-  price_high
-  price_low
-  price_close
-  price_mean
-  volume
-  open_interest
+type MarketCandlestick = {
+  market_ticker: string;
+  period_start_at: string;
+  period_end_at: string;
+  interval_minutes: number;
+  yes_bid_open?: number;
+  yes_bid_high?: number;
+  yes_bid_low?: number;
+  yes_bid_close?: number;
+  yes_ask_open?: number;
+  yes_ask_high?: number;
+  yes_ask_low?: number;
+  yes_ask_close?: number;
+  price_open?: number;
+  price_high?: number;
+  price_low?: number;
+  price_close?: number;
+  price_mean?: number;
+  volume?: number;
+  open_interest?: number;
+}
 
-orderbook_snapshots
-  id
-  market_ticker
-  observed_at
-  best_yes_bid
-  best_no_bid
-  implied_yes_ask
-  implied_no_ask
-  spread
-  depth_1
-  depth_5
-  depth_10
+type OrderbookSummary = {
+  market_ticker: string;
+  observed_at: string;
+  best_yes_bid?: number;
+  best_no_bid?: number;
+  implied_yes_ask?: number;
+  implied_no_ask?: number;
+  spread?: number;
+  depth_1?: number;
+  depth_5?: number;
+  depth_10?: number;
+}
 
-orderbook_levels
-  snapshot_id
-  side
-  price
-  quantity
-  level_index
-```
+type OrderbookLevel = {
+  side: "yes" | "no";
+  price: number;
+  quantity: number;
+  level_index: number;
+}
 
-### Research Tables
+type Theme = {
+  slug: string;
+  name: string;
+  description: string;
+  theme_type: "macro" | "company" | "markets" | "policy";
+}
 
-```text
-themes
-  id
-  slug
-  name
-  description
-  theme_type
-
-market_theme_map
-  market_ticker
-  theme_id
-  confidence
-  source
-
-watchlists
-  id
-  name
-  description
-
-watchlist_items
-  watchlist_id
-  market_ticker
-  notes
-
-derived_signals
-  id
-  market_ticker
-  observed_at
-  signal_type
-  value
-  window
-  metadata
-
-external_reference_series
-  id
-  provider
-  external_id
-  name
-  category
-  units
-  frequency
+type ClassifiedMarket = Market & {
+  themes: Theme[];
+  classification_confidence: number;
+  derived_quote?: MarketQuote;
+}
 ```
 
 ## Derived Metrics
@@ -285,7 +254,7 @@ external_reference_series
 - `midpoint_price = (yes_bid + yes_ask) / 2` when both sides exist.
 - `implied_probability_mid = midpoint_price` for standard binary markets priced from 0 to 1.
 - `spread = yes_ask - yes_bid`.
-- `price_change = current_midpoint - prior_midpoint`.
+- `price_change = current_midpoint - prior_midpoint` when prior data is available from Kalshi fields or candlesticks.
 - `probability_change_bps = price_change * 10_000`.
 - `normalized_event_probability` for mutually exclusive bucket markets when the sum of midpoints is meaningfully above or below 1.
 
@@ -299,7 +268,7 @@ external_reference_series
 
 ### Movement and Signal Detection
 
-- Largest probability movers by hour/day/week.
+- Largest probability movers by hour/day/week when Kalshi candlestick or previous-price fields provide the comparison window.
 - New active markets in tracked themes.
 - Markets with abnormal volume or spread compression.
 - Markets approaching close or resolution.
@@ -309,7 +278,7 @@ external_reference_series
 
 ### Home
 
-A compact overview of tracked themes, major probability moves, high-volume markets, markets nearing resolution, and stale or failed ingestion status.
+A compact overview of tracked themes, major probability moves, high-volume markets, markets nearing resolution, and Kalshi API request health.
 
 ### Market Explorer
 
@@ -357,7 +326,7 @@ Each market page should include:
 - Volume, open interest, liquidity, and spread charts.
 - Contract rules and settlement sources.
 - Related markets in the same event and series.
-- Theme memberships and user notes.
+- Theme memberships and optional browser-local notes/watchlist state.
 - Raw Kalshi payload inspection for debugging.
 
 ### Theme Detail
@@ -370,25 +339,35 @@ Each theme page should roll up related markets into an analyst-friendly view:
 - Liquidity and coverage summary.
 - Cross-market comparisons.
 
-## Ingestion Strategy
+## Prototype Data Strategy
 
-Start with scheduled polling. Websocket support can be added later if the dashboard needs lower-latency updates.
+Start with direct read-through API requests. The prototype should avoid scheduled ingestion, database migrations, queues, and persistent backend services.
 
-### Phase 1 Polling
+### Phase 1 Live Reads
 
-- Poll `series` daily or when metadata changes.
-- Poll `events` every 15-60 minutes.
-- Poll active `markets` every 1-5 minutes for tracked categories.
-- Poll candlesticks hourly or daily for markets in watchlists.
-- Poll orderbooks only for markets shown on detail pages or high-priority themes.
+- Fetch `series` and category tags when the app loads or when filters need them.
+- Fetch `events` and active `markets` in response to category, theme, search, and status filters.
+- Fetch market detail, candlesticks, trades, and orderbook data only when the user opens a market detail view.
+- Use TanStack Query cache settings to avoid refetching identical requests too aggressively during a session.
+- Use browser `localStorage` only for personal UI preferences, saved filters, or a lightweight watchlist.
 
-### Phase 2 Improvements
+### Prototype Limitations
 
-- Add incremental polling with `min_updated_ts` where available.
-- Add theme-aware polling frequency so important watchlists update faster.
-- Add historical backfills for newly tracked markets.
-- Add retry, dead-letter, and ingestion health tables.
-- Add websocket ingestion if near-real-time monitoring becomes a core requirement.
+- No internal historical record beyond what Kalshi returns from current market fields and candlestick endpoints.
+- No server-side watchlists or collaboration.
+- No durable audit trail of raw API responses.
+- No custom backtesting dataset until persistent storage is introduced.
+- Dashboard refresh behavior depends on user sessions and frontend/API caching, not background jobs.
+
+### Later Persistent Data Phase
+
+If the prototype shows value, add persistent storage later for:
+
+- Durable market snapshots.
+- Backtesting and release-window studies.
+- Long-running watchlists.
+- Joins to FRED, SEC filings, earnings calendars, company KPI datasets, or market data.
+- Ingestion health monitoring and replayable transformations.
 
 ## Market Classification
 
@@ -442,16 +421,16 @@ Compare related markets:
 ## Implementation Milestones
 
 1. Confirm Kalshi API access pattern and whether public endpoints are enough for the initial dashboard.
-2. Scaffold Next.js, TypeScript, Tailwind, shadcn/ui, Prisma, PostgreSQL, and Vitest.
-3. Implement Zod schemas for `series`, `events`, `markets`, and `market_snapshots`.
-4. Build ingestion for category tags, series, events, and active markets.
-5. Store market snapshots and compute midpoint probability, spread, movement, volume, and liquidity fields.
+2. Scaffold Next.js, TypeScript, Tailwind, shadcn/ui, TanStack Query, TanStack Table, Recharts, and Vitest.
+3. Implement Zod schemas for `series`, `events`, `markets`, quotes, candlesticks, and orderbook responses.
+4. Build read-only API route handlers for category tags, series, events, active markets, market detail, candlesticks, and orderbooks.
+5. Compute midpoint probability, spread, movement, volume, and liquidity fields at request/render time.
 6. Build the Market Explorer table.
-7. Build Market Detail charts from snapshots and candlesticks.
+7. Build Market Detail charts from Kalshi current market fields and candlesticks.
 8. Add the Macro Dashboard for inflation, rates, growth, labor, housing, and energy.
 9. Add the Company/KPI Dashboard for KPIs, IPOs, M&A, CEOs, product launches, and regulatory events.
-10. Add watchlists, theme pages, and ingestion-health monitoring.
-11. Add external data joins for FRED, SEC/company data, earnings calendars, or analyst estimates.
+10. Add browser-local watchlists, theme pages, and API-health indicators.
+11. Decide whether the next phase needs persistent storage for backtesting, joins to FRED/SEC/company data, or long-running watchlists.
 
 ## Open Questions
 
@@ -460,4 +439,4 @@ Compare related markets:
 - How should thinly traded markets be weighted or filtered?
 - Should sports be excluded entirely from early scope, or used as a high-liquidity test bed for market mechanics?
 - What is the right first external comparison dataset: FRED, earnings/KPI data, SEC filings, or market prices?
-- Should the dashboard include user accounts/watchlists early, or start as a single-user local research tool?
+- Should watchlists stay browser-local, or does the next phase need user accounts and server-side persistence?
